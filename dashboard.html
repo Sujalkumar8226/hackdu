@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Road Pavement Detection System</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<style>
+:root {
+  --bg:       #0a0c10;
+  --bg2:      #0f1117;
+  --bg3:      #161922;
+  --border:   rgba(255,255,255,0.07);
+  --accent:   #00e5ff;
+  --warn:     #ff6b35;
+  --ok:       #00e676;
+  --bad:      #ff1744;
+  --text:     #e0e6f0;
+  --muted:    #5a6478;
+  --mono:     'Space Mono', monospace;
+  --sans:     'DM Sans', sans-serif;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Scanline texture */
+body::before {
+  content:'';
+  position:fixed; inset:0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.04) 2px,
+    rgba(0,0,0,0.04) 4px
+  );
+  pointer-events:none;
+  z-index:9999;
+}
+
+/* ── TOP BAR ── */
+header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding: 14px 28px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top:0; z-index:100;
+}
+
+.logo {
+  display:flex; align-items:center; gap:10px;
+  font-family: var(--mono); font-size:18px; font-weight:700;
+  letter-spacing:-0.5px;
+}
+
+.logo-icon {
+  width:32px; height:32px;
+  background: var(--accent);
+  clip-path: polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
+  display:flex; align-items:center; justify-content:center;
+  animation: pulse 3s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(0,229,255,0.4)} 50%{box-shadow:0 0 0 12px rgba(0,229,255,0)} }
+
+.logo span { color: var(--accent); }
+
+.status-bar {
+  display:flex; align-items:center; gap:20px;
+  font-family: var(--mono); font-size:12px; color: var(--muted);
+}
+
+.dot {
+  width:8px; height:8px; border-radius:50%;
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+  animation: blink 1.4s ease-in-out infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+.btn {
+  padding:8px 18px; border-radius:4px; border:none; cursor:pointer;
+  font-family: var(--mono); font-size:12px; font-weight:700;
+  letter-spacing:0.5px; transition: all .2s;
+}
+.btn-primary {
+  background: var(--accent); color:#000;
+}
+.btn-primary:hover { background:#33ecff; transform:translateY(-1px); }
+
+.btn-outline {
+  background:transparent; color:var(--accent);
+  border: 1px solid var(--accent);
+}
+.btn-outline:hover { background:rgba(0,229,255,0.08); }
+
+/* ── LAYOUT ── */
+.layout {
+  display:grid;
+  grid-template-columns: 1fr 360px;
+  grid-template-rows: auto 1fr;
+  gap:0;
+  height: calc(100vh - 57px);
+}
+
+/* ── LEFT PANEL ── */
+.main-panel {
+  display:flex; flex-direction:column; gap:0;
+  border-right: 1px solid var(--border);
+  overflow:hidden;
+}
+
+.video-wrap {
+  position:relative;
+  background:#000;
+  flex:0 0 auto;
+  aspect-ratio: 16/9;
+  max-height: 52%;
+  overflow:hidden;
+}
+
+video, canvas {
+  width:100%; height:100%; object-fit:cover; display:block;
+}
+
+#overlay-canvas {
+  position:absolute; inset:0;
+  pointer-events:none;
+}
+
+.video-badge {
+  position:absolute; top:12px; left:12px;
+  background:rgba(0,0,0,0.75); backdrop-filter:blur(4px);
+  border: 1px solid var(--border);
+  padding:4px 10px; border-radius:3px;
+  font-family:var(--mono); font-size:11px; color:var(--accent);
+  display:flex; align-items:center; gap:6px;
+}
+
+.fps-badge {
+  position:absolute; top:12px; right:12px;
+  background:rgba(0,0,0,0.75); backdrop-filter:blur(4px);
+  border: 1px solid var(--border);
+  padding:4px 10px; border-radius:3px;
+  font-family:var(--mono); font-size:11px; color:var(--muted);
+}
+
+/* ── PCI SCORE BAR ── */
+.pci-strip {
+  padding:14px 20px;
+  background:var(--bg2);
+  border-bottom: 1px solid var(--border);
+  display:flex; align-items:center; gap:20px;
+}
+
+.pci-label {
+  font-family:var(--mono); font-size:11px; color:var(--muted);
+  min-width:80px;
+}
+
+.pci-bar-wrap { flex:1; }
+
+.pci-bar-track {
+  height:8px; background:var(--bg3); border-radius:4px; overflow:hidden;
+}
+
+.pci-bar-fill {
+  height:100%; border-radius:4px;
+  transition: width 0.8s cubic-bezier(.4,0,.2,1), background 0.8s;
+}
+
+.pci-value {
+  font-family:var(--mono); font-size:22px; font-weight:700;
+  min-width:52px; text-align:right;
+}
+
+.pci-rating {
+  font-size:12px; min-width:70px;
+  padding:3px 10px; border-radius:3px;
+  text-align:center; font-weight:600;
+}
+
+/* ── DEFECT LIST ── */
+.defect-list {
+  flex:1; overflow-y:auto; padding:16px 20px;
+}
+
+.section-title {
+  font-family:var(--mono); font-size:10px; letter-spacing:2px;
+  color:var(--muted); text-transform:uppercase; margin-bottom:12px;
+}
+
+.defect-item {
+  display:flex; align-items:center; gap:12px;
+  padding:10px 12px; border-radius:4px;
+  background:var(--bg2); border:1px solid var(--border);
+  margin-bottom:6px; cursor:pointer;
+  transition: border-color .2s, background .2s;
+  animation: slideIn 0.3s ease;
+}
+@keyframes slideIn { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:none} }
+
+.defect-item:hover { border-color: rgba(0,229,255,0.25); background:var(--bg3); }
+
+.defect-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.defect-name { flex:1; font-weight:500; }
+.defect-conf {
+  font-family:var(--mono); font-size:11px; color:var(--muted);
+}
+.defect-sev {
+  font-size:10px; font-weight:700; padding:2px 7px; border-radius:2px;
+}
+
+/* ── RIGHT PANEL ── */
+.right-panel {
+  display:flex; flex-direction:column;
+  overflow:hidden;
+}
+
+/* ── MAP ── */
+#map {
+  flex:0 0 260px;
+  border-bottom:1px solid var(--border);
+}
+
+#map .leaflet-container { background:#0a0c10; }
+
+/* ── STATS ── */
+.stats-panel {
+  flex:1; overflow-y:auto; padding:16px;
+}
+
+.stat-grid {
+  display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:16px;
+}
+
+.stat-card {
+  background:var(--bg2); border:1px solid var(--border);
+  border-radius:4px; padding:12px;
+}
+
+.stat-card .label {
+  font-size:10px; letter-spacing:1.5px;
+  text-transform:uppercase; color:var(--muted);
+  font-family:var(--mono); margin-bottom:4px;
+}
+
+.stat-card .value {
+  font-family:var(--mono); font-size:20px; font-weight:700;
+}
+
+.chart-wrap {
+  background:var(--bg2); border:1px solid var(--border);
+  border-radius:4px; padding:14px; margin-bottom:8px;
+}
+
+/* ── UPLOAD PANEL ── */
+.upload-zone {
+  border:2px dashed var(--border); border-radius:6px;
+  padding:20px; text-align:center; cursor:pointer;
+  transition: border-color .2s;
+  margin-bottom:10px;
+}
+.upload-zone:hover { border-color:var(--accent); }
+.upload-zone input { display:none; }
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar { width:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+/* ── ALERT TOAST ── */
+#alert-container {
+  position:fixed; top:70px; right:20px;
+  display:flex; flex-direction:column; gap:8px;
+  z-index:9000; pointer-events:none;
+}
+
+.alert {
+  padding:12px 16px; border-radius:4px;
+  font-family:var(--mono); font-size:12px;
+  border-left:3px solid;
+  backdrop-filter:blur(8px);
+  pointer-events:all;
+  animation: alertIn 0.3s ease;
+  max-width:300px;
+}
+@keyframes alertIn { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:none} }
+
+.alert-danger { background:rgba(255,23,68,0.15); border-color:var(--bad); color:#ff8a80; }
+.alert-warn   { background:rgba(255,107,53,0.15); border-color:var(--warn); color:#ffab91; }
+.alert-ok     { background:rgba(0,230,118,0.15);  border-color:var(--ok);  color:#69f0ae; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <div class="logo-icon"></div>
+    Pave<span>Vision</span>
+  </div>
+  <div class="status-bar">
+    <div class="dot"></div>
+    <span id="status-text">LIVE ANALYSIS</span>
+    <span id="clock">--:--:--</span>
+  </div>
+  <div style="display:flex;gap:8px">
+    <button class="btn btn-outline" onclick="exportReport()">EXPORT REPORT</button>
+    <button class="btn btn-primary" onclick="toggleCamera()">📷 CAMERA</button>
+  </div>
+</header>
+
+<!-- ALERT CONTAINER -->
+<div id="alert-container"></div>
+
+<!-- MAIN LAYOUT -->
+<div class="layout">
+
+  <!-- LEFT: VIDEO + DETECTIONS -->
+  <div class="main-panel">
+
+    <!-- Video Feed -->
+    <div class="video-wrap">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="overlay-canvas"></canvas>
+
+      <!-- Hidden image input canvas for file uploads -->
+      <canvas id="img-canvas" style="display:none;position:absolute;inset:0;width:100%;height:100%"></canvas>
+
+      <div class="video-badge">
+        <div class="dot" style="width:6px;height:6px"></div>
+        <span id="source-label">WEBCAM FEED</span>
+      </div>
+      <div class="fps-badge" id="fps-display">-- FPS</div>
+    </div>
+
+    <!-- PCI Bar -->
+    <div class="pci-strip">
+      <div class="pci-label">
+        <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:2px">Condition</div>
+        <div style="font-family:var(--mono);font-size:10px">PCI Index</div>
+      </div>
+      <div class="pci-bar-wrap">
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-bottom:4px;font-family:var(--mono)">
+          <span>FAILED</span><span>POOR</span><span>FAIR</span><span>GOOD</span><span>EXCELLENT</span>
+        </div>
+        <div class="pci-bar-track">
+          <div class="pci-bar-fill" id="pci-bar" style="width:100%;background:#00e676"></div>
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div class="pci-value" id="pci-value">100</div>
+        <div class="pci-rating" id="pci-rating" style="background:rgba(0,230,118,0.15);color:#00e676">Excellent</div>
+      </div>
+    </div>
+
+    <!-- Upload Zone -->
+    <div style="padding:10px 20px 0">
+      <label class="upload-zone" id="drop-zone">
+        <input type="file" id="file-input" accept="image/*,video/*" onchange="handleFileUpload(event)">
+        <div style="font-size:11px;color:var(--muted)">
+          DROP IMAGE / VIDEO or <span style="color:var(--accent)">CLICK TO BROWSE</span>
+        </div>
+      </label>
+    </div>
+
+    <!-- Defect List -->
+    <div class="defect-list">
+      <div class="section-title">Active Detections</div>
+      <div id="defect-list">
+        <div style="color:var(--muted);font-size:12px;text-align:center;padding:20px 0">
+          No defects detected — road condition optimal
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: MAP + STATS -->
+  <div class="right-panel">
+
+    <!-- Leaflet Map -->
+    <div id="map"></div>
+
+    <!-- Stats Panel -->
+    <div class="stats-panel">
+
+      <div class="section-title" style="margin-bottom:8px">Session Summary</div>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="label">Defects</div>
+          <div class="value" id="stat-total">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Potholes</div>
+          <div class="value" style="color:var(--bad)" id="stat-potholes">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Frames</div>
+          <div class="value" id="stat-frames">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">Avg PCI</div>
+          <div class="value" id="stat-avgpci">100</div>
+        </div>
+      </div>
+
+      <!-- Chart -->
+      <div class="chart-wrap">
+        <div class="section-title">Defect Breakdown</div>
+        <canvas id="defect-chart" height="160"></canvas>
+      </div>
+
+      <div class="chart-wrap">
+        <div class="section-title">PCI Over Time</div>
+        <canvas id="pci-chart" height="100"></canvas>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+/* ════════════════════════════════════════════
+   MOCK ML DETECTOR (runs in-browser demo)
+   In production, replace with calls to Python API:
+   fetch('http://localhost:5000/predict', { method:'POST', body:... })
+   ════════════════════════════════════════════ */
+
+const DEFECT_CLASSES = [
+  { name:'longitudinal_crack', color:'#ff9800', severity:'moderate' },
+  { name:'transverse_crack',   color:'#ffc107', severity:'moderate' },
+  { name:'alligator_crack',    color:'#ff5722', severity:'high'     },
+  { name:'pothole',            color:'#f44336', severity:'critical' },
+  { name:'rutting',            color:'#9c27b0', severity:'high'     },
+  { name:'raveling',           color:'#2196f3', severity:'low'      },
+  { name:'edge_break',         color:'#00bcd4', severity:'moderate' }
+];
+
+const SEV_WEIGHTS = { longitudinal_crack:0.4, transverse_crack:0.4,
+  alligator_crack:0.7, pothole:1.0, rutting:0.8, raveling:0.5, edge_break:0.6 };
+
+// State
+let cameraOn     = false;
+let stream       = null;
+let frameCount   = 0;
+let totalDefects = 0;
+let totalPotholes= 0;
+let pciHistory   = [];
+let defectTally  = {};
+let lastFpsTime  = Date.now();
+let fpsFrames    = 0;
+let currentDetections = [];
+let sessionMarkers= [];
+let sessionPath  = [];
+
+/* ── DEMO SIMULATION ─────────────────────────────── */
+function simulateDetections(w, h) {
+  const n = Math.floor(Math.random() * 4);
+  const dets = [];
+  for (let i = 0; i < n; i++) {
+    const cls  = DEFECT_CLASSES[Math.floor(Math.random() * DEFECT_CLASSES.length)];
+    const x1   = Math.random() * (w * 0.7);
+    const y1   = Math.random() * (h * 0.7);
+    const bw   = 60 + Math.random() * 120;
+    const bh   = 40 + Math.random() * 80;
+    dets.push({
+      class:      cls.name,
+      confidence: 0.55 + Math.random() * 0.4,
+      bbox:       [x1, y1, x1+bw, y1+bh],
+      color:      cls.color,
+      severity:   cls.severity
+    });
+  }
+  return dets;
+}
+
+function computePCI(dets, area) {
+  if (!dets.length) return { pci:100, rating:'Excellent', color:'#00e676' };
+  let penalty = 0;
+  dets.forEach(d => {
+    const bw = d.bbox[2]-d.bbox[0], bh = d.bbox[3]-d.bbox[1];
+    const ratio = (bw*bh)/Math.max(area,1);
+    penalty += (SEV_WEIGHTS[d.class]||0.5) * d.confidence * ratio * 120;
+  });
+  const pci = Math.max(0, Math.min(100, 100 - penalty));
+  if (pci>=85) return { pci, rating:'Excellent', color:'#00e676' };
+  if (pci>=70) return { pci, rating:'Good',      color:'#8bc34a' };
+  if (pci>=55) return { pci, rating:'Fair',      color:'#ffc107' };
+  if (pci>=40) return { pci, rating:'Poor',      color:'#ff9800' };
+  if (pci>=25) return { pci, rating:'Very Poor', color:'#ff5722' };
+  return            { pci, rating:'Failed',     color:'#f44336' };
+}
+
+/* ── CANVAS OVERLAY ──────────────────────────────── */
+const overlayCanvas = document.getElementById('overlay-canvas');
+const ctx           = overlayCanvas.getContext('2d');
+
+function drawOverlay(dets, w, h) {
+  overlayCanvas.width  = w;
+  overlayCanvas.height = h;
+  ctx.clearRect(0,0,w,h);
+
+  dets.forEach(d => {
+    const [x1,y1,x2,y2] = d.bbox;
+    const bw = x2-x1, bh = y2-y1;
+    const col = d.color;
+
+    // Box
+    ctx.strokeStyle = col;
+    ctx.lineWidth   = 2;
+    ctx.strokeRect(x1, y1, bw, bh);
+
+    // Corner accents
+    const cs = Math.min(14, bw*0.25, bh*0.25);
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x1,y1+cs); ctx.lineTo(x1,y1); ctx.lineTo(x1+cs,y1);
+    ctx.moveTo(x2-cs,y1); ctx.lineTo(x2,y1); ctx.lineTo(x2,y1+cs);
+    ctx.moveTo(x2,y2-cs); ctx.lineTo(x2,y2); ctx.lineTo(x2-cs,y2);
+    ctx.moveTo(x1+cs,y2); ctx.lineTo(x1,y2); ctx.lineTo(x1,y2-cs);
+    ctx.stroke();
+
+    // Fill glow
+    ctx.fillStyle = col + '18';
+    ctx.fillRect(x1,y1,bw,bh);
+
+    // Label
+    const label = `${d.class.replace('_',' ')} ${Math.round(d.confidence*100)}%`;
+    ctx.font     = 'bold 11px Space Mono, monospace';
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = col;
+    ctx.fillRect(x1-1, y1-20, tw+10, 18);
+    ctx.fillStyle = '#000';
+    ctx.fillText(label, x1+4, y1-6);
+  });
+}
+
+/* ── UI UPDATES ──────────────────────────────────── */
+function updatePCIDisplay(severity) {
+  const pci = severity.pci;
+  document.getElementById('pci-value').textContent = Math.round(pci);
+  document.getElementById('pci-bar').style.width      = pci+'%';
+  document.getElementById('pci-bar').style.background = severity.color;
+  const ratingEl = document.getElementById('pci-rating');
+  ratingEl.textContent = severity.rating;
+  ratingEl.style.color = severity.color;
+  ratingEl.style.background = severity.color+'22';
+}
+
+function updateDefectList(dets) {
+  const el = document.getElementById('defect-list');
+  if (!dets.length) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px 0">No defects detected</div>';
+    return;
+  }
+  el.innerHTML = dets.map(d => {
+    const sevColors = { critical:'#f44336', high:'#ff9800', moderate:'#ffc107', low:'#8bc34a' };
+    return `
+    <div class="defect-item">
+      <div class="defect-dot" style="background:${d.color}"></div>
+      <span class="defect-name">${d.class.replace(/_/g,' ')}</span>
+      <span class="defect-conf">${Math.round(d.confidence*100)}%</span>
+      <span class="defect-sev" style="background:${sevColors[d.severity]||'#888'}22;color:${sevColors[d.severity]||'#888'}">
+        ${d.severity.toUpperCase()}
+      </span>
+    </div>`;
+  }).join('');
+}
+
+function updateStats() {
+  document.getElementById('stat-total').textContent    = totalDefects;
+  document.getElementById('stat-potholes').textContent = totalPotholes;
+  document.getElementById('stat-frames').textContent   = frameCount;
+  const avg = pciHistory.length
+    ? Math.round(pciHistory.reduce((a,b)=>a+b,0)/pciHistory.length) : 100;
+  document.getElementById('stat-avgpci').textContent = avg;
+}
+
+/* ── CHARTS ──────────────────────────────────────── */
+const defectCtx = document.getElementById('defect-chart').getContext('2d');
+const defectChart = new Chart(defectCtx, {
+  type:'doughnut',
+  data:{
+    labels: DEFECT_CLASSES.map(c=>c.name.replace(/_/g,' ')),
+    datasets:[{ data: Array(7).fill(0),
+      backgroundColor: DEFECT_CLASSES.map(c=>c.color+'99'),
+      borderColor:     DEFECT_CLASSES.map(c=>c.color),
+      borderWidth:1 }]
+  },
+  options:{
+    responsive:true, maintainAspectRatio:true,
+    plugins:{
+      legend:{ position:'right',
+        labels:{ color:'#5a6478', font:{size:10,family:"'Space Mono',monospace"},
+                 padding:8, boxWidth:10 }}
+    }
+  }
+});
+
+const pciCtx = document.getElementById('pci-chart').getContext('2d');
+const pciChart = new Chart(pciCtx, {
+  type:'line',
+  data:{
+    labels:[],
+    datasets:[{
+      data:[], borderColor:'#00e5ff', backgroundColor:'rgba(0,229,255,0.06)',
+      borderWidth:1.5, pointRadius:0, tension:0.4, fill:true
+    }]
+  },
+  options:{
+    responsive:true, maintainAspectRatio:true,
+    plugins:{ legend:{ display:false }},
+    scales:{
+      x:{ display:false },
+      y:{ min:0, max:100,
+          grid:{ color:'rgba(255,255,255,0.04)'},
+          ticks:{ color:'#5a6478', font:{size:9}, stepSize:25 }}
+    }
+  }
+});
+
+function updateCharts(dets, pci) {
+  DEFECT_CLASSES.forEach((c,i) => {
+    defectChart.data.datasets[0].data[i] = defectTally[c.name] || 0;
+  });
+  defectChart.update('none');
+
+  pciHistory.push(pci);
+  if (pciHistory.length > 60) { pciHistory.shift(); }
+  pciChart.data.labels    = pciHistory.map((_,i)=>i);
+  pciChart.data.datasets[0].data = pciHistory;
+  const avg = pciHistory.reduce((a,b)=>a+b,0)/pciHistory.length;
+  const col  = avg>=70?'#00e5ff':avg>=45?'#ffc107':'#f44336';
+  pciChart.data.datasets[0].borderColor     = col;
+  pciChart.data.datasets[0].backgroundColor = col+'10';
+  pciChart.update('none');
+}
+
+/* ── MAP ─────────────────────────────────────────── */
+const map = L.map('map', { zoomControl:false, attributionControl:false });
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  { maxZoom:18 }).addTo(map);
+
+// Default view: India
+map.setView([28.67, 77.45], 13);
+
+// Simulated GPS track
+const baseCoords = [28.67, 77.45];
+let trackIndex = 0;
+const trackCoords = Array.from({length:40}, (_,i) => [
+  baseCoords[0] + (Math.random()-0.48)*0.01*(i/10+1),
+  baseCoords[1] + (i*0.0003) + (Math.random()-0.5)*0.002
+]);
+
+const polyline = L.polyline([], { color:'#00e5ff', weight:2, opacity:0.6 }).addTo(map);
+const carIcon  = L.divIcon({ html:'<div style="width:10px;height:10px;background:#00e5ff;border-radius:50%;box-shadow:0 0 6px #00e5ff"></div>', iconAnchor:[5,5] });
+const carMarker = L.marker(trackCoords[0], { icon:carIcon }).addTo(map);
+
+function advanceTrack(dets) {
+  if (trackIndex >= trackCoords.length) trackIndex = 0;
+  const pos = trackCoords[trackIndex++];
+  sessionPath.push(pos);
+  polyline.setLatLngs(sessionPath);
+  carMarker.setLatLng(pos);
+
+  dets.forEach(d => {
+    if (d.severity === 'critical' || d.severity === 'high') {
+      const col  = d.severity==='critical'?'#f44336':'#ff9800';
+      const icon = L.divIcon({ html:`<div style="width:8px;height:8px;background:${col};border-radius:50%;box-shadow:0 0 8px ${col}"></div>`, iconAnchor:[4,4] });
+      L.marker(pos, {icon}).bindTooltip(d.class.replace(/_/g,' '), {
+        permanent:false, className:'', direction:'top'
+      }).addTo(map);
+    }
+  });
+  map.panTo(pos, { animate:true, duration:0.5 });
+}
+
+/* ── ALERTS ──────────────────────────────────────── */
+let lastAlertTime = 0;
+function showAlert(msg, type='warn') {
+  const now = Date.now();
+  if (now - lastAlertTime < 3000) return;
+  lastAlertTime = now;
+
+  const el = document.createElement('div');
+  el.className = `alert alert-${type}`;
+  el.textContent = msg;
+  document.getElementById('alert-container').appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+/* ── MAIN PROCESSING LOOP ─────────────────────────── */
+function processFrame() {
+  const video = document.getElementById('video');
+  if (!cameraOn || video.readyState < 2) {
+    if (cameraOn) requestAnimationFrame(processFrame);
+    return;
+  }
+
+  const w = video.videoWidth  || 640;
+  const h = video.videoHeight || 360;
+
+  // Simulate ML detections (replace with API call for real deployment)
+  const dets     = simulateDetections(w, h);
+  const severity = computePCI(dets, w*h);
+  currentDetections = dets;
+
+  // Draw bounding boxes
+  drawOverlay(dets, w, h);
+
+  // Update UI
+  updatePCIDisplay(severity);
+  updateDefectList(dets);
+
+  // Tally stats
+  dets.forEach(d => {
+    defectTally[d.class] = (defectTally[d.class]||0) + 1;
+    totalDefects++;
+    if (d.class==='pothole') totalPotholes++;
+  });
+  frameCount++;
+  updateStats();
+  updateCharts(dets, severity.pci);
+  advanceTrack(dets);
+
+  // Alerts
+  if (dets.some(d=>d.class==='pothole'))
+    showAlert('⚠ POTHOLE DETECTED — critical severity', 'danger');
+  else if (severity.pci < 40)
+    showAlert('⚠ Low PCI detected — inspect section', 'warn');
+
+  // FPS
+  fpsFrames++;
+  const now = Date.now();
+  if (now - lastFpsTime >= 1000) {
+    document.getElementById('fps-display').textContent = fpsFrames + ' FPS';
+    fpsFrames = 0;
+    lastFpsTime = now;
+  }
+
+  requestAnimationFrame(processFrame);
+}
+
+/* ── CAMERA TOGGLE ───────────────────────────────── */
+async function toggleCamera() {
+  const video = document.getElementById('video');
+  if (cameraOn) {
+    stream?.getTracks().forEach(t=>t.stop());
+    video.srcObject = null;
+    cameraOn = false;
+    document.querySelector('.btn-primary').textContent = '📷 CAMERA';
+    document.getElementById('status-text').textContent = 'STANDBY';
+    return;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video:{width:1280,height:720} });
+    video.srcObject = stream;
+    video.style.display = 'block';
+    document.getElementById('img-canvas').style.display = 'none';
+    cameraOn = true;
+    document.querySelector('.btn-primary').textContent = '⏹ STOP';
+    document.getElementById('source-label').textContent = 'WEBCAM FEED';
+    document.getElementById('status-text').textContent  = 'LIVE ANALYSIS';
+    requestAnimationFrame(processFrame);
+    showAlert('Camera activated — analysis running', 'ok');
+  } catch(e) {
+    showAlert('Camera access denied — using demo mode', 'warn');
+    startDemoMode();
+  }
+}
+
+/* ── DEMO MODE (no camera) ───────────────────────── */
+function startDemoMode() {
+  const video = document.getElementById('video');
+  video.style.display = 'none';
+  const ic = document.getElementById('img-canvas');
+  ic.style.display = 'block';
+  ic.width  = 640; ic.height = 360;
+  const dctx = ic.getContext('2d');
+
+  overlayCanvas.width  = 640;
+  overlayCanvas.height = 360;
+
+  document.getElementById('status-text').textContent  = 'DEMO MODE';
+  document.getElementById('source-label').textContent = 'DEMO SIMULATION';
+
+  function demoLoop() {
+    // Draw road background
+    dctx.fillStyle = '#1a1a1a';
+    dctx.fillRect(0,0,640,360);
+    dctx.fillStyle = '#2a2a2a';
+    dctx.fillRect(0,140,640,80);
+    dctx.setLineDash([30,20]);
+    dctx.strokeStyle='#444'; dctx.lineWidth=2;
+    dctx.beginPath(); dctx.moveTo(0,180); dctx.lineTo(640,180); dctx.stroke();
+    dctx.setLineDash([]);
+    dctx.fillStyle='#111';
+    dctx.fillRect(0,0,640,140); dctx.fillRect(0,220,640,140);
+
+    const dets     = simulateDetections(640,360);
+    const severity = computePCI(dets, 640*360);
+    currentDetections = dets;
+    drawOverlay(dets, 640, 360);
+    updatePCIDisplay(severity);
+    updateDefectList(dets);
+    dets.forEach(d => {
+      defectTally[d.class] = (defectTally[d.class]||0)+1;
+      totalDefects++;
+      if(d.class==='pothole') totalPotholes++;
+    });
+    frameCount++;
+    updateStats();
+    updateCharts(dets, severity.pci);
+    advanceTrack(dets);
+    if(dets.some(d=>d.class==='pothole'))
+      showAlert('⚠ POTHOLE — critical severity', 'danger');
+
+    fpsFrames++;
+    const now=Date.now();
+    if(now-lastFpsTime>=1000){ document.getElementById('fps-display').textContent=fpsFrames+' FPS'; fpsFrames=0; lastFpsTime=now; }
+  }
+  setInterval(demoLoop, 300);
+}
+
+/* ── FILE UPLOAD ─────────────────────────────────── */
+function handleFileUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const video = document.getElementById('video');
+  const ic = document.getElementById('img-canvas');
+
+  if (file.type.startsWith('image/')) {
+    const url = URL.createObjectURL(file);
+    const img  = new Image();
+    img.onload = () => {
+      video.style.display = 'none';
+      ic.style.display   = 'block';
+      ic.width  = img.width;
+      ic.height = img.height;
+      ic.getContext('2d').drawImage(img, 0, 0);
+      overlayCanvas.width  = img.width;
+      overlayCanvas.height = img.height;
+      const dets = simulateDetections(img.width, img.height);
+      const sev  = computePCI(dets, img.width*img.height);
+      drawOverlay(dets, img.width, img.height);
+      updatePCIDisplay(sev);
+      updateDefectList(dets);
+      document.getElementById('source-label').textContent = 'IMAGE: '+file.name;
+      showAlert('Image analysed — '+dets.length+' defects found', dets.length?'warn':'ok');
+    };
+    img.src = url;
+  } else if (file.type.startsWith('video/')) {
+    stream?.getTracks().forEach(t=>t.stop());
+    cameraOn = false;
+    video.style.display = 'block';
+    ic.style.display = 'none';
+    video.srcObject = null;
+    video.src = URL.createObjectURL(file);
+    video.loop = true;
+    video.play();
+    document.getElementById('source-label').textContent = 'VIDEO: '+file.name;
+    cameraOn = true;
+    requestAnimationFrame(processFrame);
+    showAlert('Video loaded — analysis running', 'ok');
+  }
+}
+
+/* ── DRAG & DROP ─────────────────────────────────── */
+const dropZone = document.getElementById('drop-zone');
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.borderColor='var(--accent)'; });
+dropZone.addEventListener('dragleave', ()=> dropZone.style.borderColor='var(--border)');
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.style.borderColor='var(--border)';
+  const file = e.dataTransfer.files[0];
+  if (file) handleFileUpload({ target: { files:[file] } });
+});
+
+/* ── EXPORT REPORT ───────────────────────────────── */
+function exportReport() {
+  const avgPci = pciHistory.length
+    ? Math.round(pciHistory.reduce((a,b)=>a+b,0)/pciHistory.length) : 100;
+  const report = {
+    generated: new Date().toISOString(),
+    session: { frames:frameCount, totalDefects, potholes:totalPotholes, averagePCI:avgPci },
+    defectBreakdown: defectTally,
+    recommendation: avgPci >= 70 ? 'Routine maintenance adequate'
+                   : avgPci >= 45 ? 'Schedule preventive repair within 6 months'
+                   : 'Immediate rehabilitation required',
+    pciHistory
+  };
+  const blob = new Blob([JSON.stringify(report,null,2)], {type:'application/json'});
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = 'pavevision_report_'+Date.now()+'.json';
+  a.click();
+  showAlert('Report exported successfully', 'ok');
+}
+
+/* ── CLOCK ───────────────────────────────────────── */
+setInterval(() => {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+}, 1000);
+
+/* ── INIT ────────────────────────────────────────── */
+window.addEventListener('load', () => {
+  startDemoMode();
+  showAlert('PaveVision loaded — demo mode active', 'ok');
+});
+</script>
+</body>
+</html>
